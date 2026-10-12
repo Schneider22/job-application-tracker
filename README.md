@@ -90,6 +90,14 @@ python scripts/security_gate.py
 
 El repositorio público solo contiene código y datos sintéticos de pruebas. `.gitignore` excluye `.local/`, `data/`, `reports/`, credenciales, tokens y bases SQLite. El flujo de GitHub Actions vuelve a ejecutar las pruebas sin credenciales.
 
+En Windows, publica cada cambio lógico validado desde la raíz del repositorio:
+
+```powershell
+.\scripts\publish_change.ps1 -Message "Describe the change"
+```
+
+El script ejecuta las pruebas, agrega los archivos permitidos por `.gitignore`, analiza el árbol preparado, valida el diff, crea el commit y lo sube a `main`.
+
 ## Límites del MVP
 
 El conector genérico requiere IMAP/IMAPS habilitado en el proveedor. Gmail API se cubre con OAuth. Un proveedor que exija un protocolo OAuth/API propietario necesita un adaptador adicional. Google Drive conserva el libro Excel y el HTML autoincluido en una carpeta privada; se pueden abrir desde Drive. OneDrive conserva el libro Excel y el HTML en la carpeta configurada.

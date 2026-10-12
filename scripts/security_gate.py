@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN_PARTS = {".local", "data", "reports", ".venv", "venv", "vendor"}
 FORBIDDEN_NAMES = {".env", "credentials.json", "token.json", "config.json", "profile.json"}
-FORBIDDEN_NAME_PARTS = ("client_secret", "oauth_client", "oauth-token", "oauth_token")
+FORBIDDEN_NAME_PARTS = ("credential", "token", "config", "profile", "client_secret", "oauth")
 FORBIDDEN_SUFFIXES = {".sqlite", ".sqlite3", ".db", ".pem", ".p12"}
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
@@ -31,8 +31,11 @@ def main() -> int:
         if any(part.casefold() in FORBIDDEN_PARTS for part in relative.parts):
             violations.append(f"forbidden data path: {relative.as_posix()}")
         folded_name = relative.name.casefold()
+        sensitive_json = relative.suffix.casefold() == ".json" and any(
+            part in folded_name for part in FORBIDDEN_NAME_PARTS
+        )
         if (folded_name in FORBIDDEN_NAMES or relative.suffix.casefold() in FORBIDDEN_SUFFIXES
-                or any(part in folded_name for part in FORBIDDEN_NAME_PARTS)):
+                or sensitive_json):
             violations.append(f"forbidden local file: {relative.as_posix()}")
         path = ROOT / relative
         try:
