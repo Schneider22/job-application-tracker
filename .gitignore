@@ -1,0 +1,40 @@
+# Local configuration and user/job data
+.env
+.env.*
+!.env.example
+.local/
+data/
+reports/
+*.db
+*.sqlite
+*.sqlite3
+credentials*.json
+token*.json
+client_secret*.json
+oauth*.json
+*_oauth*.json
+profile*.json
+config*.json
+*.mbox
+*.eml
+*.pem
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+vendor/
+build/
+dist/
+*.egg-info/
+
+# Editors and OS
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

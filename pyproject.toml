@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-application-tracker"
+version = "0.1.0"
+description = "Local-first job application tracking from read-only email sources"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["openpyxl>=3.1,<4", "reportlab>=4,<5", "tzdata>=2025.2"]
+
+[project.scripts]
+job-tracker = "job_tracker.cli:main"
+
+[tool.setuptools]
+packages = ["job_tracker"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+job_tracker = ["dashboard.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
