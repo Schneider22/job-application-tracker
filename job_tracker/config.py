@@ -50,6 +50,7 @@ class Settings:
     mailbox: MailboxSettings = field(default_factory=MailboxSettings)
     cloud: CloudSettings = field(default_factory=CloudSettings)
     schedule: ScheduleSettings = field(default_factory=ScheduleSettings)
+    email_reports_enabled: bool = False
     email_lookback_days: int = 365
     follow_up_after_days: int = 7
     profile: dict[str, Any] = field(default_factory=dict)
@@ -60,6 +61,7 @@ class Settings:
             mailbox=MailboxSettings(**raw.get("mailbox", {})),
             cloud=CloudSettings(**raw.get("cloud", {})),
             schedule=ScheduleSettings(**raw.get("schedule", {})),
+            email_reports_enabled=bool(raw.get("email_reports_enabled", False)),
             email_lookback_days=int(raw.get("email_lookback_days", 365)),
             follow_up_after_days=int(raw.get("follow_up_after_days", 7)),
             profile=raw.get("profile", {}),

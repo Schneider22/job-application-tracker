@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import email
+import json
 import unittest
 import uuid
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import unquote
 from unittest.mock import Mock, patch
+from email import policy
 
 from openpyxl import load_workbook
 
@@ -14,6 +17,7 @@ from job_tracker.cloud import GoogleDrivePublisher
 from job_tracker.config import CloudSettings, MailboxSettings
 from job_tracker.dashboard import render_dashboard
 from job_tracker.database import Database
+from job_tracker.emailer import EmailDeliveryError, GmailReportSender
 from job_tracker.mailbox import GmailApiMailbox, ImapMailbox, parse_rfc822
 from job_tracker.models import Application, EmailMessage
 from job_tracker.oauth import GoogleOAuthClient
@@ -91,6 +95,10 @@ class MailboxTests(unittest.TestCase):
 class SecurityAndCloudTests(unittest.TestCase):
     def test_google_mail_and_drive_use_separate_narrow_scopes(self):
         self.assertEqual(GoogleOAuthClient.GMAIL_SCOPES, ("https://www.googleapis.com/auth/gmail.readonly",))
+        self.assertEqual(GoogleOAuthClient.GMAIL_SEND_SCOPES, (
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+        ))
         self.assertEqual(GoogleOAuthClient.DRIVE_SCOPES, ("https://www.googleapis.com/auth/drive.file",))
 
     def test_oauth_client_file_is_local_input_not_embedded_in_settings(self):
@@ -115,6 +123,92 @@ class SecurityAndCloudTests(unittest.TestCase):
         self.assertIn("multipart/related", content_type)
         self.assertIn(b"report.xlsx", body)
         self.assertIn(b"synthetic-file", body)
+
+
+class GmailReportTests(unittest.TestCase):
+    def setUp(self):
+        self.client_path = temporary_path("gmail-client", ".json")
+        self.client_path.write_text('{"installed":{"client_id":"synthetic-client"}}', encoding="utf-8")
+        self.pdf_path = temporary_path("daily-report", ".pdf")
+        self.xlsx_path = temporary_path("daily-report", ".xlsx")
+        self.pdf_path.write_bytes(b"%PDF-synthetic")
+        self.xlsx_path.write_bytes(b"synthetic-xlsx")
+        self.store = MemoryStore()
+
+    def tearDown(self):
+        for path in (self.client_path, self.pdf_path, self.xlsx_path):
+            path.unlink(missing_ok=True)
+
+    def test_sends_only_to_authenticated_account_with_pdf_and_xlsx(self):
+        sender = GmailReportSender(
+            MailboxSettings(provider="gmail", gmail_client_file=str(self.client_path)), self.store
+        )
+        sender.oauth.token = Mock(return_value="synthetic-access-token")
+        requests = []
+
+        class Response:
+            def __init__(self, value):
+                self.value = value
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return json.dumps(self.value).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            if request.full_url.endswith("/profile"):
+                return Response({"emailAddress": "self@example.test"})
+            return Response({"id": "synthetic-sent-id"})
+
+        with patch("job_tracker.emailer.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = sender.send(
+                {"pdf": self.pdf_path, "xlsx": self.xlsx_path},
+                "morning", datetime(2026, 10, 13, 8, 0),
+            )
+
+        self.assertEqual(result, {"status": "sent", "attachment_count": 2})
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(requests[0].full_url.endswith("/profile"))
+        self.assertEqual(requests[1].get_method(), "POST")
+        sent = json.loads(requests[1].data)
+        raw = base64.urlsafe_b64decode(sent["raw"] + "=" * (-len(sent["raw"]) % 4))
+        parsed = email.message_from_bytes(raw, policy=policy.default)
+        self.assertEqual(parsed["To"], "self@example.test")
+        self.assertEqual(parsed["From"], "self@example.test")
+        self.assertEqual({part.get_filename() for part in parsed.iter_attachments()},
+                         {self.pdf_path.name, self.xlsx_path.name})
+
+    def test_refuses_to_send_if_authenticated_account_differs_from_configured_mailbox(self):
+        sender = GmailReportSender(
+            MailboxSettings(provider="gmail", email="expected@example.test",
+                            gmail_client_file=str(self.client_path)), self.store
+        )
+        sender.oauth.token = Mock(return_value="synthetic-access-token")
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"emailAddress":"other@example.test"}'
+        with patch("job_tracker.emailer.urllib.request.urlopen", return_value=response) as request:
+            with self.assertRaises(EmailDeliveryError):
+                sender.send({"pdf": self.pdf_path, "xlsx": self.xlsx_path}, "morning", datetime.now())
+        request.assert_called_once()
+
+    def test_refuses_to_send_if_authenticated_account_differs_from_cloud_account(self):
+        sender = GmailReportSender(
+            MailboxSettings(provider="gmail", gmail_client_file=str(self.client_path)), self.store,
+            expected_account="expected@example.test",
+        )
+        sender.oauth.token = Mock(return_value="synthetic-access-token")
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"emailAddress":"other@example.test"}'
+        with patch("job_tracker.emailer.urllib.request.urlopen", return_value=response) as request:
+            with self.assertRaises(EmailDeliveryError):
+                sender.send({"pdf": self.pdf_path, "xlsx": self.xlsx_path}, "morning", datetime.now())
+        request.assert_called_once()
 
 
 class ArtifactTests(unittest.TestCase):

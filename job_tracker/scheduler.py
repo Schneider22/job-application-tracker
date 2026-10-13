@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
 import re
@@ -46,9 +47,25 @@ def install_windows_tasks(times: list[str] | None = None) -> list[str]:
                         "/TR", command, "/F", "/IT"], check=True, capture_output=True, text=True)
         names.append(name)
     catchup_name = "JobApplicationTracker-on-login"
-    catchup_command = f'"{sys.executable}" -m job_tracker.cli scheduled-run --slot catchup'
-    subprocess.run(["schtasks.exe", "/Create", "/TN", catchup_name, "/SC", "ONLOGON",
-                    "/TR", catchup_command, "/F", "/IT"], check=True, capture_output=True, text=True)
+    # schtasks.exe rejects an ONLOGON trigger for a standard interactive user on
+    # some Windows configurations. Register that trigger through the native
+    # ScheduledTasks cmdlets, passing user paths as environment data rather than
+    # interpolating them into PowerShell source.
+    environment = os.environ.copy()
+    environment["JOB_TRACKER_TASK_PYTHON"] = sys.executable
+    environment["JOB_TRACKER_TASK_WORKDIR"] = str(Path(__file__).resolve().parents[1])
+    register_catchup = r"""
+$ErrorActionPreference = 'Stop'
+$userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$action = New-ScheduledTaskAction -Execute $env:JOB_TRACKER_TASK_PYTHON -Argument '-m job_tracker.cli scheduled-run --slot catchup' -WorkingDirectory $env:JOB_TRACKER_TASK_WORKDIR
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName 'JobApplicationTracker-on-login' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Recover pending Job Application Tracker report slots' -Force | Out-Null
+"JobApplicationTracker-on-login"
+"""
+    subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", register_catchup],
+                   check=True, capture_output=True, text=True, env=environment)
     names.append(catchup_name)
     return names
 

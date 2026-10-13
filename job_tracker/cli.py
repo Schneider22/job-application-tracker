@@ -16,6 +16,7 @@ from .cloud import publish_files
 from .config import Settings, app_home, load_settings, save_settings
 from .dashboard import render_dashboard
 from .database import Database
+from .emailer import GmailReportSender
 from .models import Application
 from .reporting import generate_reports
 from .scheduler import due_slots, install_windows_tasks, remove_windows_tasks
@@ -48,7 +49,13 @@ def command_setup(args: argparse.Namespace) -> int:
         store.put("mailbox-password", password)
     else:
         settings.mailbox.gmail_client_file = _prompt("Path to local Google OAuth desktop client JSON", settings.mailbox.gmail_client_file)
-        print("Gmail OAuth will request read-only access the first time sync runs. The Google password is not stored.")
+        print("Gmail synchronization uses read-only access. Enabling report delivery separately requests Gmail send permission.")
+
+    send_reports = _prompt("Send daily PDF and Excel reports to this same Gmail account? (y/n)",
+                           "y" if settings.email_reports_enabled else "n").casefold() not in {"n", "no"}
+    if send_reports and mailbox_provider != "gmail":
+        raise ValueError("Self-addressed email reports currently require the Gmail provider.")
+    settings.email_reports_enabled = send_reports
 
     cloud_provider = _prompt("Cloud dashboard: google, microsoft, or skip", settings.cloud.provider or "skip").casefold()
     if cloud_provider not in {"google", "microsoft", "skip"}:
@@ -120,15 +127,17 @@ def command_sync(args: argparse.Namespace) -> int:
     settings = load_settings()
     database = Database()
     bootstrap_local_conversations(database)
+    sync_succeeded = True
     try:
         result = sync_mail(database, settings, CredentialStore())
         print("Email sync:", json.dumps(result, ensure_ascii=False))
         update_affinities(database, settings)
     except Exception as exc:
+        sync_succeeded = False
         print(f"Email sync was not completed: {exc}", file=sys.stderr)
-        if not (args.reports or args.publish):
+        if not (args.reports or args.publish or args.email):
             return 1
-    if args.reports or args.publish:
+    if args.reports or args.publish or args.email:
         files = generate_reports(database)
         print("Reports written locally:", json.dumps({key: str(value) for key, value in files.items()}, ensure_ascii=False))
         if args.publish:
@@ -138,17 +147,35 @@ def command_sync(args: argparse.Namespace) -> int:
             except Exception as exc:
                 print(f"Cloud publication was not completed: {exc}", file=sys.stderr)
                 return 1
+        if args.email:
+            if not sync_succeeded:
+                print("Report email was not sent because synchronization failed.", file=sys.stderr)
+                return 1
+            try:
+                result = GmailReportSender(settings.mailbox, CredentialStore(), settings.cloud.account_email).send(
+                    files, "manual", datetime.now().astimezone()
+                )
+                print("Report email:", json.dumps(result, ensure_ascii=False))
+            except Exception as exc:
+                print(f"Report email was not sent: {exc}", file=sys.stderr)
+                return 1
     return 0
 
 
 def command_report(args: argparse.Namespace) -> int:
+    settings = load_settings()
     database = Database()
     bootstrap_local_conversations(database)
     files = generate_reports(database)
     print(json.dumps({key: str(value) for key, value in files.items()}, ensure_ascii=False, indent=2))
     if args.publish:
-        results = publish_files(load_settings().cloud, CredentialStore(), files)
+        results = publish_files(settings.cloud, CredentialStore(), files)
         print("Published:", json.dumps(results, ensure_ascii=False, indent=2))
+    if args.email:
+        result = GmailReportSender(settings.mailbox, CredentialStore(), settings.cloud.account_email).send(
+            files, "manual", datetime.now().astimezone()
+        )
+        print("Report email:", json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -232,8 +259,13 @@ def command_scheduled_run(args: argparse.Namespace) -> int:
             files = generate_reports(database, timezone_name=settings.schedule.timezone, run_label=slot)
             results = publish_files(settings.cloud, CredentialStore(), files)
             logging.info("published=%s", json.dumps(results, ensure_ascii=False))
+            if slot_status == 0 and settings.email_reports_enabled:
+                result = GmailReportSender(settings.mailbox, CredentialStore(), settings.cloud.account_email).send(
+                    files, slot, now_local
+                )
+                logging.info("report_email=%s", json.dumps(result, ensure_ascii=False))
         except Exception as exc:
-            logging.exception("report generation or cloud publication failed: %s", exc)
+            logging.exception("report generation, cloud publication, or email delivery failed: %s", exc)
             slot_status = 1
         if slot_status == 0:
             database.set_metadata(slot_key, now_local.isoformat(timespec="seconds"))
@@ -297,9 +329,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync = sub.add_parser("sync", help="Read new messages without changing the mailbox.")
     sync.add_argument("--reports", action="store_true", help="Generate PDF, Excel, and HTML dashboard files.")
     sync.add_argument("--publish", action="store_true", help="Publish reports and dashboard to the configured cloud account.")
+    sync.add_argument("--email", action="store_true", help="Email the PDF and Excel report to the authenticated Gmail account.")
     sync.set_defaults(handler=command_sync)
     report = sub.add_parser("report", help="Generate local PDF, Excel, and dashboard snapshot files.")
     report.add_argument("--publish", action="store_true")
+    report.add_argument("--email", action="store_true", help="Email the PDF and Excel report to the authenticated Gmail account.")
     report.set_defaults(handler=command_report)
     profile = sub.add_parser("profile", help="Import a local profile JSON and calculate affinity estimates.")
     profile.add_argument("path")

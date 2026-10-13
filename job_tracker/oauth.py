@@ -43,6 +43,10 @@ class GoogleOAuthClient:
     AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     TOKEN_URL = "https://oauth2.googleapis.com/token"
     GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.readonly",)
+    GMAIL_SEND_SCOPES = (
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+    )
     DRIVE_SCOPES = ("https://www.googleapis.com/auth/drive.file",)
 
     def __init__(self, credential_file: str | Path, store: CredentialStore, account: str,

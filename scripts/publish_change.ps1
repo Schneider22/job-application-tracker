@@ -4,13 +4,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-python -m unittest discover -s tests -v
+$pythonCommand = if (Test-Path ".venv\Scripts\python.exe") { ".venv\Scripts\python.exe" } else { "python" }
+& $pythonCommand -m unittest discover -s tests -v
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; change was not committed or pushed." }
 
 git add --all
 if ($LASTEXITCODE -ne 0) { throw "Could not stage the change." }
 
-python scripts/security_gate.py
+& $pythonCommand scripts/security_gate.py
 if ($LASTEXITCODE -ne 0) { throw "Security gate failed; change was not pushed." }
 
 git diff --cached --check
